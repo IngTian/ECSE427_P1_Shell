@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdlib.h>
 
+const int MAX_PATH_SIZE = 1024;
+
 struct UserCommand {
     char *args[20];
     int isRunningInBackground;
@@ -64,9 +66,12 @@ void executeBuiltInCommands(
 ) {
     char *executionFileName = command->args[0];
     if (strcmp(executionFileName, "pwd") == 0) {
-        // TODO Complete the pwd function.
+        char buf[MAX_PATH_SIZE];
+        size_t size_cap = pathconf(".", _PC_PATH_MAX);
+        getcwd(buf, size_cap);
+        printf("The current directory is: %s\n", buf);
     } else if (strcmp(executionFileName, "cd") == 0) {
-        // TODO Complete the cd function.
+        chdir(command->args[1]);
     } else if (strcmp(executionFileName, "exit") == 0) {
         // TODO Complete the exit function.
     } else if (strcmp(executionFileName, "fg") == 0) {
@@ -76,6 +81,11 @@ void executeBuiltInCommands(
     }
 }
 
+/**
+ * Decide whether the command is a built-in command.
+ * @param executionFileName The command name.
+ * @return 1 for yes, and 0 otherwise.
+ */
 int isBuiltInFunction(char *executionFileName) {
     return strcmp(executionFileName, "pwd") == 0 ||
            strcmp(executionFileName, "cd") == 0 ||
@@ -92,12 +102,14 @@ void executeUserCommands(struct UserCommand *userCommand) {
     // TODO Execute a user command, take care of the piping and output redirection if needed.
 }
 
-int main(void) {
+int main() {
 
     // This is a managing block for various child processes.
     struct ChildProcessBlock *backgroundChildProcessBlocks[1000];
     int numberOfChildProcesses = 0;
 
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "EndlessLoop"
     while (1) {
         struct UserCommand *command = getUserCommand("\n>> ");
         printf("COMMAND RECEIVED: %s\nCOMMAND LENGTH: %d\nCOMMAND IN BACKGROUND: %d\n", *command->args,
@@ -127,10 +139,7 @@ int main(void) {
                 // it is not meant to run in the background.
                 waitpid(childProcess, childProcessStatus, 0);
         }
-
-        // Since the previous command is no longer needed,
-        // we are going to destroy it.
-        free(command);
     }
+#pragma clang diagnostic pop
     return 0;
 }
