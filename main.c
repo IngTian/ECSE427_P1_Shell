@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <signal.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
@@ -135,13 +136,23 @@ void executeUserCommands(struct UserCommand *userCommand) {
         int p[2];
         pipe(p);
 
+        char MSG[20] = "Hello World!";
+
+        printf("Pipes Created: p0-%d p1-%d\n", p[0], p[1]);
+
         // Fork a child process to execute the second command.
         int childPid = fork();
-        if (childPid != 0)
-            dup2(p[1], 1) && execvp(argv1[0], argv1) && wait(NULL);
-        else{
+        if (childPid != 0) {
+            close(p[0]);
+            dup2(p[1], 1);
+            execvp(argv1[0], argv1);
+            close(p[1]);
+            wait(NULL);
+        } else {
+            close(p[1]);
             dup2(p[0], 0);
-            // && execvp(argv2[0], argv2);
+            execvp(argv2[0], argv2);
+            close(p[0]);
         }
     }
 }
