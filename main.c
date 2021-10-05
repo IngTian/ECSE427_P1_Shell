@@ -23,7 +23,6 @@ struct ChildProcessBlock {
  * @return User Command.
  */
 struct UserCommand *getUserCommand(char *prompt) {
-
     struct UserCommand *result = malloc(sizeof(struct UserCommand));
     char *line = NULL;
 
@@ -114,14 +113,36 @@ void executeUserCommands(struct UserCommand *userCommand) {
     if (!locationOfRedirection && !locationOfPiping) {
         execvp(argv[0], argv);
     } else if (locationOfRedirection) {
+        // Get the file name.
         char *fileAddress = argv[locationOfRedirection + 1];
-        argv[locationOfRedirection] = "\0";
-        argv[locationOfRedirection + 1] = "\0";
+
+        // Remove redirection symbols and output file name.
+        argv[locationOfRedirection] = NULL;
+        argv[locationOfRedirection + 1] = NULL;
+
+        // Open the file, alter FDT, and run commands.
+        printf("Opening File Address: %s\n", fileAddress);
         int outputFileDescriptor = open(fileAddress, O_WRONLY | O_APPEND);
+        printf("The File Descriptor: %d\n", outputFileDescriptor);
         dup2(outputFileDescriptor, 1);
         execvp(argv[0], argv);
     } else if (locationOfPiping) {
-        // TODO Piping
+        // Separate the two commands.
+        char **argv1 = argv, **argv2 = &argv[locationOfPiping + 1];
+        argv[locationOfPiping] = NULL;
+
+        // Construct a pipe.
+        int p[2];
+        pipe(p);
+
+        // Fork a child process to execute the second command.
+        int childPid = fork();
+        if (childPid != 0)
+            dup2(p[1], 1) && execvp(argv1[0], argv1) && wait(NULL);
+        else{
+            dup2(p[0], 0);
+            // && execvp(argv2[0], argv2);
+        }
     }
 }
 
