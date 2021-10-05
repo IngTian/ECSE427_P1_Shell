@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <fcntl.h>
 
 const int MAX_PATH_SIZE = 1024;
 
@@ -73,7 +74,7 @@ void executeBuiltInCommands(
     } else if (strcmp(executionFileName, "cd") == 0) {
         chdir(command->args[1]);
     } else if (strcmp(executionFileName, "exit") == 0) {
-        // TODO Complete the exit function.
+        exit(0);
     } else if (strcmp(executionFileName, "fg") == 0) {
         // TODO Complete the fg function.
     } else if (strcmp(executionFileName, "jobs") == 0) {
@@ -99,7 +100,29 @@ int isBuiltInFunction(char *executionFileName) {
  * @param userCommand A user command, stored in the heap.
  */
 void executeUserCommands(struct UserCommand *userCommand) {
-    // TODO Execute a user command, take care of the piping and output redirection if needed.
+    char **argv = userCommand->args;
+    int locationOfRedirection = 0, locationOfPiping = 0;
+    for (int i = 0; i < userCommand->commandLength; i++)
+        if (strcmp(argv[i], ">") == 0)
+            locationOfRedirection = i;
+        else if (strcmp(argv[i], "|") == 0)
+            locationOfPiping = i;
+
+    printf("HAS REDIRECTION: %d\n", locationOfRedirection);
+    printf("HAS PIPING: %d\n", locationOfPiping);
+
+    if (!locationOfRedirection && !locationOfPiping) {
+        execvp(argv[0], argv);
+    } else if (locationOfRedirection) {
+        char *fileAddress = argv[locationOfRedirection + 1];
+        argv[locationOfRedirection] = "\0";
+        argv[locationOfRedirection + 1] = "\0";
+        int outputFileDescriptor = open(fileAddress, O_WRONLY | O_APPEND);
+        dup2(outputFileDescriptor, 1);
+        execvp(argv[0], argv);
+    } else if (locationOfPiping) {
+        // TODO Piping
+    }
 }
 
 int main() {
@@ -124,9 +147,11 @@ int main() {
             executeBuiltInCommands(command, backgroundChildProcessBlocks, numberOfChildProcesses);
         else {
             int *childProcessStatus = 0, childProcess = fork();
-            if (childProcess == 0)
+            if (childProcess == 0) {
+                printf("Executing Commands...\n");
                 executeUserCommands(command);
-            else if (command->isRunningInBackground) {
+                exit(0);
+            } else if (command->isRunningInBackground) {
                 // If the command is meant to run in the background,
                 // we shall not intervene with it except take a record
                 // of its pid and relevant information.
@@ -139,6 +164,8 @@ int main() {
                 // it is not meant to run in the background.
                 waitpid(childProcess, childProcessStatus, 0);
         }
+
+        free(command);
     }
 #pragma clang diagnostic pop
     return 0;
