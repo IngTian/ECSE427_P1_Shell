@@ -7,6 +7,14 @@
 
 #define STANDARD_OUT_FD 1
 #define STANDARD_IN_FD 0
+#define RED   "\x1B[31m"
+#define GRN   "\x1B[32m"
+#define YEL   "\x1B[33m"
+#define BLU   "\x1B[34m"
+#define MAG   "\x1B[35m"
+#define CYN   "\x1B[36m"
+#define WHT   "\x1B[37m"
+#define RESET "\x1B[0m"
 #define True 1
 #define False 0
 
@@ -85,6 +93,11 @@ static void handle_sigtstp_signal(int sig) {
     printf("SIGTSTP RECEIVED\n");
 }
 
+void get_working_directory(char *dir) {
+    size_t size_cap = pathconf(".", _PC_PATH_MAX);
+    getcwd(dir, size_cap);
+}
+
 /**
  * Execute built in commands in the parent process.
  * @param command A command.
@@ -97,11 +110,16 @@ void execute_built_in_command(
     char *executionFileName = command->args[0];
     if (strcmp(executionFileName, "pwd") == 0) {
         char buf[MAX_PATH_SIZE];
-        size_t size_cap = pathconf(".", _PC_PATH_MAX);
-        getcwd(buf, size_cap);
-        printf("The current directory is: %s\n", buf);
+        get_working_directory(buf);
+        printf(WHT "The current directory is: " GRN "%s\n" RESET, buf);
     } else if (strcmp(executionFileName, "cd") == 0) {
-        chdir(command->args[1]);
+        char *dir = command->args[1];
+        if (strlen(dir) == 0) {
+            char buf[MAX_PATH_SIZE];
+            get_working_directory(buf);
+            printf(WHT "The current directory is: " GRN "%s\n" RESET, buf);
+        } else
+            chdir(dir);
     } else if (strcmp(executionFileName, "exit") == 0) {
         exit(0);
     } else if (strcmp(executionFileName, "fg") == 0) {
@@ -118,19 +136,22 @@ void execute_built_in_command(
         if (found) {
             childProcesses[index] = NULL;
             g_current_running_process_pid = pid;
+            printf("The process with PID " YEL "%d" RESET " is found, bringing it to foreground.\n", pid);
             waitpid(pid, &status, 0);
         } else
-            printf("ERROR! Cannot find the specified PID %d.", pid);
+            printf(RED "ERROR! Cannot find the specified PID %d." RESET, pid);
 
     } else if (strcmp(executionFileName, "jobs") == 0) {
         for (int i = 0; i < g_number_of_background_child_processes; i++) {
             struct child_process_block *process = childProcesses[i];
             int status = 0;
             if (waitpid(process->pid, &status, WNOHANG) == 0)
-                printf("---- JOB RUNNING ---- PID: %d COMMAND: %s\n", process->pid, process->command->args[0]);
+                printf("---- BACKGROUND JOB ---- PID: " GRN "%d" RESET " COMMAND: %s\n", process->pid,
+                       process->command->args[0]);
         }
     }
 }
+
 
 /**
  * Decide whether the command is a built-in command.
@@ -218,7 +239,7 @@ int main() {
 
     while (1) {
         struct user_command *command = read_user_command("\n>> ");
-        printf("COMMAND RECEIVED: %s\nCOMMAND LENGTH: %d\nCOMMAND IN BACKGROUND: %d\n", *command->args,
+        printf(WHT "COMMAND RECEIVED: %s\nCOMMAND LENGTH: %d\nCOMMAND IN BACKGROUND: %d\n" RESET, *command->args,
                command->commandLength, command->isRunningInBackground);
         /*
          *  If the command is a built-in command,
@@ -226,31 +247,31 @@ int main() {
          *  If not, we create a child process and
          *  execute it.
          */
-        if (is_built_in_function(command->args[0]))
+        if (is_built_in_function(command->args[0])) {
             execute_built_in_command(command, g_background_child_processes);
-        else {
-            int *childProcessStatus = 0, childProcess = fork();
-            if (childProcess == 0) {
-                printf("Executing Commands...\n");
+            free(command);
+        } else {
+            int *child_process_status = 0, child_process_pid = fork();
+            if (child_process_pid == 0) {
+                printf(GRN "Executing User Command: %s\n" RESET, command->args[0]);
                 execute_user_command(command);
                 exit(0);
             } else if (command->isRunningInBackground) {
                 // If the command is meant to run in the background,
                 // we shall not intervene with it except take a record
                 // of its pid and relevant information.
-                struct child_process_block *aNewBackgroundChildProcess = malloc(sizeof(struct child_process_block));
-                aNewBackgroundChildProcess->command = command;
-                aNewBackgroundChildProcess->pid = childProcess;
-                g_background_child_processes[g_number_of_background_child_processes++] = aNewBackgroundChildProcess;
+                struct child_process_block *new_process_block = malloc(sizeof(struct child_process_block));
+                new_process_block->command = command;
+                new_process_block->pid = child_process_pid;
+                g_background_child_processes[g_number_of_background_child_processes++] = new_process_block;
             } else if (!command->isRunningInBackground) {
                 // We shall wait for the child process to complete if
                 // it is not meant to run in the background.
-                g_current_running_process_pid = childProcess;
-                waitpid(childProcess, childProcessStatus, 0);
+                g_current_running_process_pid = child_process_pid;
+                waitpid(child_process_pid, child_process_status, 0);
+                free(command);
             }
         }
-
-        free(command);
     }
 }
 
