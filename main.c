@@ -83,6 +83,7 @@ static void handle_sigint_signal(int sig) {
 
     for (int i = 0; i < g_number_of_background_child_processes; i++) {
         struct child_process_block *process = g_background_child_processes[i];
+        if (process == NULL) continue;
         int status = 0;
         if (waitpid(process->pid, &status, WNOHANG) == 0)
             kill(process->pid, SIGKILL);
@@ -114,7 +115,7 @@ void execute_built_in_command(
         printf(WHT "The current directory is: " GRN "%s\n" RESET, buf);
     } else if (strcmp(executionFileName, "cd") == 0) {
         char *dir = command->args[1];
-        if (strlen(dir) == 0) {
+        if (dir == NULL || strlen(dir) == 0) {
             char buf[MAX_PATH_SIZE];
             get_working_directory(buf);
             printf(WHT "The current directory is: " GRN "%s\n" RESET, buf);
@@ -144,6 +145,7 @@ void execute_built_in_command(
     } else if (strcmp(executionFileName, "jobs") == 0) {
         for (int i = 0; i < g_number_of_background_child_processes; i++) {
             struct child_process_block *process = childProcesses[i];
+            if (process == NULL) continue;
             int status = 0;
             if (waitpid(process->pid, &status, WNOHANG) == 0)
                 printf("---- BACKGROUND JOB ---- PID: " GRN "%d" RESET " COMMAND: %s\n", process->pid,
@@ -215,13 +217,10 @@ void execute_user_command(struct user_command *userCommand) {
             close(p[0]);
             dup2(p[1], STANDARD_OUT_FD);
             execvp(argv1[0], argv1);
-            close(p[1]);
-            wait(NULL);
         } else {
             close(p[1]);
             dup2(p[0], STANDARD_IN_FD);
             execvp(argv2[0], argv2);
-            close(p[0]);
         }
     }
 }
@@ -248,12 +247,13 @@ int main() {
          *  execute it.
          */
         if (is_built_in_function(command->args[0])) {
+            printf(MAG "Executing Built-in Command: %s\n" RESET, command->args[0]);
             execute_built_in_command(command, g_background_child_processes);
             free(command);
         } else {
             int *child_process_status = 0, child_process_pid = fork();
             if (child_process_pid == 0) {
-                printf(GRN "Executing User Command: %s\n" RESET, command->args[0]);
+                printf(BLU "Executing User Command: %s\n" RESET, command->args[0]);
                 execute_user_command(command);
                 exit(0);
             } else if (command->isRunningInBackground) {
