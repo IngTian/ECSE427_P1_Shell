@@ -5,26 +5,29 @@
 #include <stdlib.h>
 #include <fcntl.h>
 
-#define STANDARD_OUT 1
-#define STANDARD_IN 0
+#define STANDARD_OUT_FD 1
+#define STANDARD_IN_FD 0
+#define True 1
+#define False 0
 
-struct UserCommand {
+typedef struct user_command {
     char *args[20];
     int isRunningInBackground;
     int commandLength;
-};
-struct ChildProcessBlock {
+} user_command;
+
+typedef struct child_process_block {
     int pid;
-    struct UserCommand *command;
-};
+    struct user_command *command;
+} child_process_block;
 
 
 const int MAX_PATH_SIZE = 1024;
 
 // This is a managing block for various child processes.
-struct ChildProcessBlock *backgroundChildProcessBlocks[1000];
-int numberOfChildProcesses = 0;
-int currentRunningPid = -1;
+struct child_process_block *g_background_child_processes[1024];
+int g_number_of_background_child_processes = 0;
+int g_current_running_process_pid = -1;
 
 
 /**
@@ -32,8 +35,8 @@ int currentRunningPid = -1;
  * @param prompt Define the prompt.
  * @return User Command.
  */
-struct UserCommand *getUserCommand(char *prompt) {
-    struct UserCommand *result = malloc(sizeof(struct UserCommand));
+struct user_command *read_user_command(char *prompt) {
+    struct user_command *result = malloc(sizeof(struct user_command));
     char *line = NULL;
 
     // Receive Input from user.
@@ -65,19 +68,20 @@ struct UserCommand *getUserCommand(char *prompt) {
 }
 
 
-static void sigintHandler(int sig) {
-    if (currentRunningPid != -1)
-        kill(currentRunningPid, SIGKILL);
+static void handle_sigint_signal(int sig) {
+    printf("SIGINT RECEIVED\n");
+    if (g_current_running_process_pid != -1)
+        kill(g_current_running_process_pid, SIGKILL);
 
-    for (int i = 0; i < numberOfChildProcesses; i++) {
-        struct ChildProcessBlock *process = backgroundChildProcessBlocks[i];
+    for (int i = 0; i < g_number_of_background_child_processes; i++) {
+        struct child_process_block *process = g_background_child_processes[i];
         int status = 0;
         if (waitpid(process->pid, &status, WNOHANG) == 0)
             kill(process->pid, SIGKILL);
     }
 }
 
-static void sigtstpHandler(int sig) {
+static void handle_sigtstp_signal(int sig) {
     printf("SIGTSTP RECEIVED\n");
 }
 
@@ -86,10 +90,9 @@ static void sigtstpHandler(int sig) {
  * @param command A command.
  * @param childProcesses All of the child processes.
  */
-void executeBuiltInCommands(
-        struct UserCommand *command,
-        struct ChildProcessBlock *childProcesses[],
-        int numberOfChildProcesses
+void execute_built_in_command(
+        struct user_command *command,
+        struct child_process_block *childProcesses[]
 ) {
     char *executionFileName = command->args[0];
     if (strcmp(executionFileName, "pwd") == 0) {
@@ -102,11 +105,26 @@ void executeBuiltInCommands(
     } else if (strcmp(executionFileName, "exit") == 0) {
         exit(0);
     } else if (strcmp(executionFileName, "fg") == 0) {
-        int status = 0;
-        waitpid(atoi(command->args[1]), &status, 0);
+        int status = 0, pid = atoi(command->args[1]), found = False, index;
+
+        // Get the child process with the specific PID.
+        for (int i = 0; i < g_number_of_background_child_processes; i++)
+            if (childProcesses[i]->pid == pid) {
+                found = True;
+                index = i;
+                break;
+            }
+
+        if (found) {
+            childProcesses[index] = NULL;
+            g_current_running_process_pid = pid;
+            waitpid(pid, &status, 0);
+        } else
+            printf("ERROR! Cannot find the specified PID %d.", pid);
+
     } else if (strcmp(executionFileName, "jobs") == 0) {
-        for (int i = 0; i < numberOfChildProcesses; i++) {
-            struct ChildProcessBlock *process = childProcesses[i];
+        for (int i = 0; i < g_number_of_background_child_processes; i++) {
+            struct child_process_block *process = childProcesses[i];
             int status = 0;
             if (waitpid(process->pid, &status, WNOHANG) == 0)
                 printf("---- JOB RUNNING ---- PID: %d COMMAND: %s\n", process->pid, process->command->args[0]);
@@ -119,7 +137,7 @@ void executeBuiltInCommands(
  * @param executionFileName The command name.
  * @return 1 for yes, and 0 otherwise.
  */
-int isBuiltInFunction(char *executionFileName) {
+int is_built_in_function(char *executionFileName) {
     return strcmp(executionFileName, "pwd") == 0 ||
            strcmp(executionFileName, "cd") == 0 ||
            strcmp(executionFileName, "exit") == 0 ||
@@ -131,7 +149,7 @@ int isBuiltInFunction(char *executionFileName) {
  * Executing the user command in another process.
  * @param userCommand A user command, stored in the heap.
  */
-void executeUserCommands(struct UserCommand *userCommand) {
+void execute_user_command(struct user_command *userCommand) {
     char **argv = userCommand->args;
     int locationOfRedirection = 0, locationOfPiping = 0;
     for (int i = 0; i < userCommand->commandLength; i++)
@@ -157,9 +175,9 @@ void executeUserCommands(struct UserCommand *userCommand) {
         printf("Opening File Address: %s\n", fileAddress);
         int outputFileDescriptor = open(fileAddress, O_WRONLY | O_APPEND);
         printf("The File Descriptor: %d\n", outputFileDescriptor);
-        dup2(outputFileDescriptor, STANDARD_OUT);
+        dup2(outputFileDescriptor, STANDARD_OUT_FD);
         execvp(argv[0], argv);
-    } else if (locationOfPiping) {
+    } else {
         // Separate the two commands.
         char **argv1 = argv, **argv2 = &argv[locationOfPiping + 1];
         argv[locationOfPiping] = NULL;
@@ -168,37 +186,38 @@ void executeUserCommands(struct UserCommand *userCommand) {
         int p[2];
         pipe(p);
 
-        char MSG[20] = "Hello World!";
-
         printf("Pipes Created: p0-%d p1-%d\n", p[0], p[1]);
 
         // Fork a child process to execute the second command.
         int childPid = fork();
         if (childPid != 0) {
             close(p[0]);
-            dup2(p[1], STANDARD_OUT);
+            dup2(p[1], STANDARD_OUT_FD);
             execvp(argv1[0], argv1);
             close(p[1]);
             wait(NULL);
         } else {
             close(p[1]);
-            dup2(p[0], STANDARD_IN);
+            dup2(p[0], STANDARD_IN_FD);
             execvp(argv2[0], argv2);
             close(p[0]);
         }
     }
 }
 
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "DanglingPointer"
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "EndlessLoop"
+
 int main() {
 
     // Register signal handlers.
-    signal(SIGINT, sigintHandler);
-    signal(SIGTSTP, sigtstpHandler);
+    signal(SIGINT, handle_sigint_signal);
+    signal(SIGTSTP, handle_sigtstp_signal);
 
-#pragma clang diagnostic push
-#pragma ide diagnostic ignored "EndlessLoop"
     while (1) {
-        struct UserCommand *command = getUserCommand("\n>> ");
+        struct user_command *command = read_user_command("\n>> ");
         printf("COMMAND RECEIVED: %s\nCOMMAND LENGTH: %d\nCOMMAND IN BACKGROUND: %d\n", *command->args,
                command->commandLength, command->isRunningInBackground);
         /*
@@ -207,31 +226,33 @@ int main() {
          *  If not, we create a child process and
          *  execute it.
          */
-        if (isBuiltInFunction(command->args[0]))
-            executeBuiltInCommands(command, backgroundChildProcessBlocks, numberOfChildProcesses);
+        if (is_built_in_function(command->args[0]))
+            execute_built_in_command(command, g_background_child_processes);
         else {
             int *childProcessStatus = 0, childProcess = fork();
             if (childProcess == 0) {
                 printf("Executing Commands...\n");
-                executeUserCommands(command);
+                execute_user_command(command);
                 exit(0);
             } else if (command->isRunningInBackground) {
                 // If the command is meant to run in the background,
                 // we shall not intervene with it except take a record
                 // of its pid and relevant information.
-                struct ChildProcessBlock *aNewBackgroundChildProcess = malloc(sizeof(struct ChildProcessBlock));
+                struct child_process_block *aNewBackgroundChildProcess = malloc(sizeof(struct child_process_block));
                 aNewBackgroundChildProcess->command = command;
                 aNewBackgroundChildProcess->pid = childProcess;
-                backgroundChildProcessBlocks[numberOfChildProcesses++] = aNewBackgroundChildProcess;
-            } else if (!command->isRunningInBackground)
+                g_background_child_processes[g_number_of_background_child_processes++] = aNewBackgroundChildProcess;
+            } else if (!command->isRunningInBackground) {
                 // We shall wait for the child process to complete if
                 // it is not meant to run in the background.
-                currentRunningPid = childProcess;
-            waitpid(childProcess, childProcessStatus, 0);
+                g_current_running_process_pid = childProcess;
+                waitpid(childProcess, childProcessStatus, 0);
+            }
         }
 
         free(command);
     }
-#pragma clang diagnostic pop
-    return 0;
 }
+
+#pragma clang diagnostic pop
+#pragma clang diagnostic pop
