@@ -80,14 +80,6 @@ static void handle_sigint_signal(int sig) {
     printf("SIGINT RECEIVED\n");
     if (g_current_running_process_pid != -1)
         kill(g_current_running_process_pid, SIGKILL);
-
-    for (int i = 0; i < g_number_of_background_child_processes; i++) {
-        struct child_process_block *process = g_background_child_processes[i];
-        if (process == NULL) continue;
-        int status = 0;
-        if (waitpid(process->pid, &status, WNOHANG) == 0)
-            kill(process->pid, SIGKILL);
-    }
 }
 
 static void handle_sigtstp_signal(int sig) {
@@ -115,32 +107,26 @@ void execute_built_in_command(
         printf(WHT "The current directory is: " GRN "%s\n" RESET, buf);
     } else if (strcmp(executionFileName, "cd") == 0) {
         char *dir = command->args[1];
-        if (dir == NULL || strlen(dir) == 0) {
+        if (command->commandLength == 1) {
             char buf[MAX_PATH_SIZE];
             get_working_directory(buf);
             printf(WHT "The current directory is: " GRN "%s\n" RESET, buf);
         } else
             chdir(dir);
     } else if (strcmp(executionFileName, "exit") == 0) {
+        signal(SIGQUIT, SIG_IGN);
+        kill(0, SIGQUIT);
         exit(0);
     } else if (strcmp(executionFileName, "fg") == 0) {
-        int status = 0, pid = atoi(command->args[1]), found = False, index;
+        int index = atoi(command->args[1]);
 
-        // Get the child process with the specific PID.
-        for (int i = 0; i < g_number_of_background_child_processes; i++)
-            if (childProcesses[i]->pid == pid) {
-                found = True;
-                index = i;
-                break;
-            }
-
-        if (found) {
+        if (index < g_number_of_background_child_processes) {
+            g_current_running_process_pid = childProcesses[index]->pid;
             childProcesses[index] = NULL;
-            g_current_running_process_pid = pid;
-            printf("The process with PID " YEL "%d" RESET " is found, bringing it to foreground.\n", pid);
-            waitpid(pid, &status, 0);
+            printf("The process with INDEX " YEL "%d" RESET " is found, bringing it to foreground.\n", index);
+            waitpid(g_current_running_process_pid, NULL, 0);
         } else
-            printf(RED "ERROR! Cannot find the specified PID %d." RESET, pid);
+            printf(RED "ERROR! Cannot find the specified index %d." RESET, index);
 
     } else if (strcmp(executionFileName, "jobs") == 0) {
         for (int i = 0; i < g_number_of_background_child_processes; i++) {
@@ -148,7 +134,8 @@ void execute_built_in_command(
             if (process == NULL) continue;
             int status = 0;
             if (waitpid(process->pid, &status, WNOHANG) == 0)
-                printf("---- BACKGROUND JOB ---- PID: " GRN "%d" RESET " COMMAND: %s\n", process->pid,
+                printf("---- BACKGROUND JOB ---- INDEX: " CYN "%d" RESET " PID: " GRN "%d" RESET " COMMAND: %s\n", i,
+                       process->pid,
                        process->command->args[0]);
         }
     }
@@ -181,9 +168,6 @@ void execute_user_command(struct user_command *userCommand) {
         else if (strcmp(argv[i], "|") == 0)
             locationOfPiping = i;
 
-    printf("HAS REDIRECTION: %d\n", locationOfRedirection);
-    printf("HAS PIPING: %d\n", locationOfPiping);
-
     if (!locationOfRedirection && !locationOfPiping) {
         execvp(argv[0], argv);
     } else if (locationOfRedirection) {
@@ -195,9 +179,7 @@ void execute_user_command(struct user_command *userCommand) {
         argv[locationOfRedirection + 1] = NULL;
 
         // Open the file, alter FDT, and run commands.
-        printf("Opening File Address: %s\n", fileAddress);
-        int outputFileDescriptor = open(fileAddress, O_WRONLY | O_APPEND);
-        printf("The File Descriptor: %d\n", outputFileDescriptor);
+        int outputFileDescriptor = open(fileAddress, O_WRONLY);
         dup2(outputFileDescriptor, STANDARD_OUT_FD);
         execvp(argv[0], argv);
     } else {
@@ -208,8 +190,6 @@ void execute_user_command(struct user_command *userCommand) {
         // Construct a pipe.
         int p[2];
         pipe(p);
-
-        printf("Pipes Created: p0-%d p1-%d\n", p[0], p[1]);
 
         // Fork a child process to execute the second command.
         int childPid = fork();
@@ -237,9 +217,8 @@ int main() {
     signal(SIGTSTP, handle_sigtstp_signal);
 
     while (1) {
+        g_current_running_process_pid = -1;
         struct user_command *command = read_user_command("\n>> ");
-        printf(WHT "COMMAND RECEIVED: %s\nCOMMAND LENGTH: %d\nCOMMAND IN BACKGROUND: %d\n" RESET, *command->args,
-               command->commandLength, command->isRunningInBackground);
         /*
          *  If the command is a built-in command,
          *  we simply execute it in the main thread.
@@ -247,15 +226,13 @@ int main() {
          *  execute it.
          */
         if (is_built_in_function(command->args[0])) {
-            printf(MAG "Executing Built-in Command: %s\n" RESET, command->args[0]);
             execute_built_in_command(command, g_background_child_processes);
             free(command);
         } else {
-            int *child_process_status = 0, child_process_pid = fork();
+            int child_process_pid = fork();
             if (child_process_pid == 0) {
-                printf(BLU "Executing User Command: %s\n" RESET, command->args[0]);
                 execute_user_command(command);
-                exit(0);
+                exit(EXIT_SUCCESS);
             } else if (command->isRunningInBackground) {
                 // If the command is meant to run in the background,
                 // we shall not intervene with it except take a record
@@ -268,10 +245,12 @@ int main() {
                 // We shall wait for the child process to complete if
                 // it is not meant to run in the background.
                 g_current_running_process_pid = child_process_pid;
-                waitpid(child_process_pid, child_process_status, 0);
+                waitpid(child_process_pid, NULL, 0);
                 free(command);
             }
         }
+
+        sleep(1);
     }
 }
 
