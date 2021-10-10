@@ -77,13 +77,13 @@ struct user_command *read_user_command(char *prompt) {
 
 
 static void handle_sigint_signal(int sig) {
-    printf("SIGINT RECEIVED\n");
+    printf("\nSIGINT RECEIVED\n");
     if (g_current_running_process_pid != -1)
         kill(g_current_running_process_pid, SIGKILL);
 }
 
 static void handle_sigtstp_signal(int sig) {
-    printf("SIGTSTP RECEIVED\n");
+    printf("\nSIGTSTP RECEIVED\n");
 }
 
 void get_working_directory(char *dir) {
@@ -118,6 +118,9 @@ void execute_built_in_command(
         kill(0, SIGQUIT);
         exit(0);
     } else if (strcmp(executionFileName, "fg") == 0) {
+        if (command->commandLength == 1)
+            return;
+
         int index = atoi(command->args[1]);
 
         if (index < g_number_of_background_child_processes) {
@@ -219,6 +222,12 @@ int main() {
     while (1) {
         g_current_running_process_pid = -1;
         struct user_command *command = read_user_command("\n>> ");
+
+        if (command->commandLength == 0){
+            free(command);
+            continue;
+        }
+
         /*
          *  If the command is a built-in command,
          *  we simply execute it in the main thread.
@@ -249,8 +258,6 @@ int main() {
                 free(command);
             }
         }
-
-        sleep(1);
     }
 }
 
