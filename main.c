@@ -70,6 +70,7 @@ struct user_command *read_user_command(char *prompt) {
         if (strlen(token) > 0)
             result->args[commandLength++] = token;
     }
+    result->args[commandLength] = NULL;
     result->commandLength = commandLength;
 
     return result;
@@ -223,7 +224,7 @@ int main() {
         g_current_running_process_pid = -1;
         struct user_command *command = read_user_command("\n>> ");
 
-        if (command->commandLength == 0){
+        if (command->commandLength == 0) {
             free(command);
             continue;
         }
